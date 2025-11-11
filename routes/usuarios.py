@@ -1,3 +1,9 @@
+# usuarios.py
+import os
+# Evitar el detect_wrap_bug en entornos problemáticos (Render + Python 3.13)
+# Esta variable debe estar presente antes de que Passlib cargue los handlers bcrypt.
+os.environ.setdefault("PASSLIB_USE_LEGACY_BCRYPT", "yes")
+
 from fastapi import APIRouter, HTTPException, Depends, Body
 from pydantic import BaseModel, Field, EmailStr
 from database import usuarios_collection
@@ -6,14 +12,17 @@ from jose import jwt
 from datetime import datetime, timedelta
 from utils.auth_utils import obtener_usuario_actual, solo_admin
 from typing import Optional, List
-import os
+
+import os as _os
 
 # === Configuración JWT ===
-SECRET_KEY = os.environ.get("SECRET_KEY")
+SECRET_KEY = _os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError("SECRET_KEY no definida en variables de entorno")
 ALGORITHM = "HS256"
 
-# === Passlib CryptContext para bcrypt seguro ===
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# === Passlib CryptContext: Argon2 first, bcrypt as fallback for existing hashes ===
+pwd_context = CryptContext(schemes=["argon2", "bcrypt"], deprecated="auto")
 
 router = APIRouter(prefix="/usuarios", tags=["Usuarios"])
 
@@ -43,6 +52,7 @@ def registrar_usuario(datos: UsuarioRegistro):
     if usuarios_collection.find_one({"correo": correo}):
         raise HTTPException(status_code=400, detail="❌ El correo ya está registrado")
 
+    # Hashear con el esquema preferido (argon2)
     hashed_password = pwd_context.hash(datos.password)
 
     nuevo_usuario = {
@@ -62,8 +72,32 @@ def login(datos: UsuarioLogin):
     correo = datos.correo.strip().lower()
     user = usuarios_collection.find_one({"correo": correo})
 
-    if not user or not pwd_context.verify(datos.password, user["password"]):
+    if not user:
         raise HTTPException(status_code=401, detail="❌ Credenciales inválidas")
+
+    stored_hash = user.get("password")
+    if not stored_hash:
+        raise HTTPException(status_code=401, detail="❌ Credenciales inválidas")
+
+    # Verificar la contraseña usando CryptContext (soporta argon2 y bcrypt)
+    try:
+        valid = pwd_context.verify(datos.password, stored_hash)
+    except Exception:
+        # En caso de alguna excepción rara durante verify, tratar como credenciales inválidas
+        raise HTTPException(status_code=401, detail="❌ Credenciales inválidas")
+
+    if not valid:
+        raise HTTPException(status_code=401, detail="❌ Credenciales inválidas")
+
+    # Si el hash necesita actualización (por ejemplo: era bcrypt y ahora queremos argon2), 
+    # re-hashear la contraseña y actualizar la DB para migrar al nuevo esquema.
+    try:
+        if pwd_context.needs_update(stored_hash):
+            new_hash = pwd_context.hash(datos.password)
+            usuarios_collection.update_one({"_id": user["_id"]}, {"$set": {"password": new_hash}})
+    except Exception:
+        # No interrumpimos el login por fallos al re-hashear, solo lo registramos (si quieres, agrega logging)
+        pass
 
     expira = datetime.utcnow() + timedelta(hours=6)
     token = jwt.encode({
@@ -154,6 +188,7 @@ def eliminar_usuario_admin(correo: str):
         raise HTTPException(status_code=404, detail=f"❌ Usuario con correo '{correo}' no encontrado")
 
     return {"mensaje": f"🗑️ Usuario con correo '{correo}' eliminado correctamente"}
+
 
 
 '''from fastapi import APIRouter, HTTPException, Depends, Body
