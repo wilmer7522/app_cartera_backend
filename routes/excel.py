@@ -6,6 +6,7 @@ from io import BytesIO
 from fastapi.responses import StreamingResponse
 import io
 
+
 router = APIRouter(prefix="/excel", tags=["Excel"])
 
 # === Subir Excel (solo admin) ===

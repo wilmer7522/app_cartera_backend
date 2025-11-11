@@ -57,7 +57,7 @@ def registrar_usuario(datos: UsuarioRegistro):
 
 
 # === LOGIN ===
-@router.post("/login")
+'''@router.post("/login")
 def login(datos: UsuarioLogin):
     correo = datos.correo.strip().lower()
     user = usuarios_collection.find_one({"correo": correo})
@@ -76,7 +76,35 @@ def login(datos: UsuarioLogin):
         "token": token,
         "nombre": user.get("nombre", ""),
         "rol": user.get("rol", "vendedor"),
+    }'''
+
+# === LOGIN ===
+@router.post("/login")
+def login(datos: UsuarioLogin):
+    MAX_BCRYPT_LENGTH = 72  # ✅ Limite de bcrypt
+
+    correo = datos.correo.strip().lower()
+    user = usuarios_collection.find_one({"correo": correo})
+
+    # Truncar la contraseña a 72 caracteres antes de verificar
+    password_to_check = datos.password[:MAX_BCRYPT_LENGTH]
+
+    if not user or not bcrypt.verify(password_to_check, user["password"]):
+        raise HTTPException(status_code=401, detail="❌ Credenciales inválidas")
+
+    expira = datetime.utcnow() + timedelta(hours=6)
+    token = jwt.encode({
+        "correo": user["correo"],
+        "rol": user.get("rol", "vendedor"),
+        "exp": expira
+    }, SECRET_KEY, algorithm=ALGORITHM)
+
+    return {
+        "token": token,
+        "nombre": user.get("nombre", ""),
+        "rol": user.get("rol", "vendedor"),
     }
+
 
 
 # === PERFIL ===
