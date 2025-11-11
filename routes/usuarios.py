@@ -12,6 +12,7 @@ from jose import jwt
 from datetime import datetime, timedelta
 from utils.auth_utils import obtener_usuario_actual, solo_admin
 from typing import Optional, List
+from passlib.context import CryptContext
 
 import os as _os
 
